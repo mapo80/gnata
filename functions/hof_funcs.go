@@ -250,6 +250,19 @@ func makeFnReduce(evalFn EvalFn) evaluator.EnvAwareBuiltin {
 		} else {
 			reduceArity = 2
 		}
+		if a := accumulationOf(fn); a != nil {
+			out, ok, err := reduceOwned(a, arr, arrAny, startIdx, acc, focus, env, reduceArity)
+			if err != nil {
+				return nil, err
+			}
+			if ok {
+				if grown, isSlice := out.([]any); isSlice {
+					// No spare capacity leaves the reduction.
+					out = slices.Clip(grown)
+				}
+				return out, nil
+			}
+		}
 		callArgs := make([]any, reduceArity)
 		for i := startIdx; i < len(arr); i++ {
 			callArgs[0] = acc
