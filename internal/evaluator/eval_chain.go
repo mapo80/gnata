@@ -69,6 +69,7 @@ func evalChain(right *parser.Node, piped, input any, env *Environment) (any, err
 	// than calling fn(piped). e.g. $trim ~> $uppercase creates a composed function.
 	switch piped.(type) {
 	case BuiltinFunction, EnvAwareBuiltin, *Lambda, *SignedBuiltin:
+		noteCapture(env)
 		return BuiltinFunction(func(args []any, focus any) (any, error) {
 			intermediate, err := callFunction(piped, args, focus, env)
 			if err != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"sync"
 
 	"github.com/recolabs/gnata/internal/parser"
 )
@@ -49,6 +50,44 @@ type Environment struct {
 	bindings map[string]any // nil until inline overflows
 	calls    *callCounter   // shared call-depth counter; nil inherits from parent
 	ctx      context.Context
+	// pooled marks the environment of one lambda call, returned to callEnvs
+	// when the call ends unless escaped: a closure (lambda, partial
+	// application, transform) was made in it or in a scope below it.
+	pooled, escaped bool
+}
+
+// callEnvs are the environments of ended lambda calls nothing retained: a
+// lambda call bound its parameters in a new Environment each time (the most
+// allocated object of the engine's generated controllers, which call
+// predicates and reducers hundreds of thousands of times per turn).
+var callEnvs = sync.Pool{New: func() any { return new(Environment) }}
+
+// newCallEnvironment is NewChildEnvironment(parent) for a lambda call, from
+// callEnvs.
+func newCallEnvironment(parent *Environment, calls *callCounter) *Environment {
+	env := callEnvs.Get().(*Environment)
+	env.parent, env.calls, env.pooled = parent, calls, true
+	return env
+}
+
+// releaseCallEnvironment returns the environment of an ended lambda call,
+// unless a closure captured it or one of its scopes.
+func releaseCallEnvironment(env *Environment) {
+	if !env.pooled || env.escaped {
+		return
+	}
+	*env = Environment{}
+	callEnvs.Put(env)
+}
+
+// noteCapture records that a closure is made in env: every call environment
+// on its chain is kept by that closure and leaves the pool.
+func noteCapture(env *Environment) {
+	for e := env; e != nil; e = e.parent {
+		if e.pooled {
+			e.escaped = true
+		}
+	}
 }
 
 // NewEnvironment creates a root environment with no bindings.

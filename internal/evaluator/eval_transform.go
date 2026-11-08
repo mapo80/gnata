@@ -31,6 +31,7 @@ func deepClone(v any) any {
 }
 
 func evalTransform(node *parser.Node, _ any, env *Environment) (any, error) {
+	noteCapture(env)
 	return BuiltinFunction(func(args []any, focus any) (any, error) {
 		var doc any
 		if len(args) > 0 {

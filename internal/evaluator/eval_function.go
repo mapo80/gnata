@@ -89,6 +89,7 @@ func evalLambda(node *parser.Node, input any, env *Environment) (any, error) {
 		sig = node.Signature.Raw
 		parsedSig, _ = parser.ParseSig(sig)
 	}
+	noteCapture(env)
 	return &Lambda{
 		Params:        params,
 		Body:          node.Body,
@@ -101,6 +102,7 @@ func evalLambda(node *parser.Node, input any, env *Environment) (any, error) {
 }
 
 func evalPartial(node *parser.Node, input any, env *Environment) (any, error) {
+	noteCapture(env)
 	fn, err := Eval(node.Procedure, input, env)
 	if err != nil {
 		return nil, err
@@ -204,8 +206,7 @@ func callFunction(fn any, args []any, focus any, env *Environment) (any, error) 
 				counter.depth--
 				return nil, stackOverflowError(counter)
 			}
-			childEnv := NewChildEnvironment(f.Closure)
-			childEnv.calls = counter
+			childEnv := newCallEnvironment(f.Closure, counter)
 			for i, param := range f.Params {
 				if i < len(args) {
 					childEnv.Bind(param, args[i])
@@ -218,6 +219,7 @@ func callFunction(fn any, args []any, focus any, env *Environment) (any, error) 
 				bodyFocus = f.CapturedFocus
 			}
 			result, err := Eval(f.Body, bodyFocus, childEnv)
+			releaseCallEnvironment(childEnv)
 			counter.depth--
 			if err != nil {
 				return nil, err
