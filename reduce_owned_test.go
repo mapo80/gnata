@@ -23,7 +23,7 @@ func general(source string) string {
 	return source
 }
 
-func evalJSON(t *testing.T, source, input string) (string, string) {
+func evalOutcome(t *testing.T, source, input string) (string, string) {
 	t.Helper()
 	expression, err := gnata.Compile(source)
 	if err != nil {
@@ -76,8 +76,8 @@ func TestReduceOwnedAccumulationMatchesTheGeneralReduce(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			want, wantErr := evalJSON(t, general(c.fast), c.input)
-			got, gotErr := evalJSON(t, c.fast, c.input)
+			want, wantErr := evalOutcome(t, general(c.fast), c.input)
+			got, gotErr := evalOutcome(t, c.fast, c.input)
 			if got != want || fmt.Sprint(gotErr) != fmt.Sprint(wantErr) {
 				t.Fatalf("%s\n got %s %s\nwant %s %s", c.fast, got, gotErr, want, wantErr)
 			}

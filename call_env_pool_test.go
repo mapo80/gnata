@@ -23,7 +23,7 @@ func TestCallEnvironmentsCapturedByClosuresAreKept(t *testing.T) {
 	} {
 		t.Run(test.name, func(t *testing.T) {
 			for range 3 {
-				got, err := evalJSON(t, test.source, "")
+				got, err := evalOutcome(t, test.source, "")
 				if err != "" || got != test.want {
 					t.Fatalf("%s = %s %s, want %s", test.source, got, err, test.want)
 				}
