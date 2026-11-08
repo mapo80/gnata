@@ -10,12 +10,14 @@ import (
 // GroupPlan caches per-schema evaluation metadata: which expressions are fast-path
 // eligible for a given JSON schema (set of present fields).
 type GroupPlan struct {
-	// FastPaths[i] is the GJSON path for expressions[i] if fast-path eligible, or "" if not.
+	// FastPaths[i] is the dotted path (GJSON path syntax) for expressions[i] if fast-path eligible, or "" if not.
 	FastPaths []string
-	// ExprFastPath[i] is true if expressions[i] can use the zero-copy GJSON path.
+	// FastPathSteps[i] holds the un-escaped field names of FastPaths[i].
+	FastPathSteps [][]string
+	// ExprFastPath[i] is true if expressions[i] can use the zero-copy rawjson path.
 	ExprFastPath []bool
 	// CmpFast[i] is non-nil when expressions[i] is a path-vs-literal comparison
-	// that can be short-circuited with a single gjson scan.
+	// that can be short-circuited with a single rawjson scan.
 	CmpFast []*parser.ComparisonFastPath
 	// FuncFast[i] is non-nil when expressions[i] is a supported built-in function
 	// call on a pure path (e.g. $exists(a.b), $lowercase(name)).

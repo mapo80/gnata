@@ -10,25 +10,25 @@ import (
 
 	"github.com/recolabs/gnata/internal/evaluator"
 	"github.com/recolabs/gnata/internal/parser"
-	"github.com/tidwall/gjson"
+	"github.com/recolabs/gnata/internal/rawjson"
 )
 
-func isJSONArray(r *gjson.Result) bool {
-	return r.Type == gjson.JSON && r.Raw != "" && r.Raw[0] == '['
+func isJSONArray(r *rawjson.Result) bool {
+	return r.Type == rawjson.JSON && r.Raw != "" && r.Raw[0] == '['
 }
 
-func isJSONObject(r *gjson.Result) bool {
-	return r.Type == gjson.JSON && r.Raw != "" && r.Raw[0] == '{'
+func isJSONObject(r *rawjson.Result) bool {
+	return r.Type == rawjson.JSON && r.Raw != "" && r.Raw[0] == '{'
 }
 
 // collectNumbers extracts all numeric values from a JSON array result.
 // Returns (numbers, true) if all elements are numbers, or (nil, false)
 // if any non-number element is found.
-func collectNumbers(r *gjson.Result) ([]float64, bool) {
+func collectNumbers(r *rawjson.Result) ([]float64, bool) {
 	arr := r.Array()
 	nums := make([]float64, 0, len(arr))
 	for _, elem := range arr {
-		if elem.Type != gjson.Number {
+		if elem.Type != rawjson.Number {
 			return nil, false
 		}
 		nums = append(nums, elem.Float())
@@ -36,9 +36,9 @@ func collectNumbers(r *gjson.Result) ([]float64, bool) {
 	return nums, true
 }
 
-// funcFastHandler evaluates a fast-path function against a resolved gjson.Result.
+// funcFastHandler evaluates a fast-path function against a resolved rawjson.Result.
 // Returns (result, handled, error).
-type funcFastHandler func(r *gjson.Result, f *parser.FuncFastPath) (any, bool, error)
+type funcFastHandler func(r *rawjson.Result, f *parser.FuncFastPath) (any, bool, error)
 
 // funcFastHandlers maps each FuncFastKind to its handler. Using a dispatch map
 // instead of a giant switch keeps per-handler complexity low and avoids exhaustive
@@ -73,7 +73,7 @@ var funcFastHandlers = map[parser.FuncFastKind]funcFastHandler{
 }
 
 func evalFunc(f *parser.FuncFastPath, data json.RawMessage, mapData map[string]json.RawMessage) (result any, handled bool, err error) {
-	r := resolveGjsonPath(data, mapData, f.Path)
+	r := resolvePath(data, mapData, f.PathSteps)
 	if r.Exists() {
 		if h, ok := funcFastHandlers[f.Kind]; ok {
 			return h(&r, f)
@@ -115,7 +115,7 @@ func evalFunc(f *parser.FuncFastPath, data json.RawMessage, mapData map[string]j
 
 // walkedValues resolves f's primary-argument path across array boundaries,
 // against whichever of data / mapData the caller has available.
-func walkedValues(f *parser.FuncFastPath, data json.RawMessage, mapData map[string]json.RawMessage) ([]gjson.Result, bool) {
+func walkedValues(f *parser.FuncFastPath, data json.RawMessage, mapData map[string]json.RawMessage) ([]rawjson.Result, bool) {
 	if data != nil {
 		return walkPureStepsValues(f.PathSteps, data)
 	}
@@ -136,9 +136,9 @@ func pathExistsWalked(f *parser.FuncFastPath, data json.RawMessage, mapData map[
 
 // containsAnyValue reports whether any string element of values contains
 // substr, matching $contains's existing any-match semantics over a sequence.
-func containsAnyValue(values []gjson.Result, substr string) bool {
+func containsAnyValue(values []rawjson.Result, substr string) bool {
 	for _, v := range values {
-		if v.Type == gjson.String && strings.Contains(v.Str, substr) {
+		if v.Type == rawjson.String && strings.Contains(v.Str, substr) {
 			return true
 		}
 	}
@@ -146,9 +146,9 @@ func containsAnyValue(values []gjson.Result, substr string) bool {
 }
 
 // aggregateFastValues computes a numeric aggregate fast path over an
-// already-resolved slice of gjson values. Returns (nil, false) when the kind
+// already-resolved slice of rawjson values. Returns (nil, false) when the kind
 // isn't a supported aggregate or an element isn't numeric.
-func aggregateFastValues(kind parser.FuncFastKind, values []gjson.Result) (any, bool) {
+func aggregateFastValues(kind parser.FuncFastKind, values []rawjson.Result) (any, bool) {
 	if kind == parser.FuncFastCount {
 		return float64(len(values)), true
 	}
@@ -189,11 +189,11 @@ func aggregateFastValues(kind parser.FuncFastKind, values []gjson.Result) (any, 
 }
 
 // collectNumbersFrom extracts numeric values from an already-collected slice
-// of gjson results. Returns (nil, false) if any element isn't a number.
-func collectNumbersFrom(values []gjson.Result) ([]float64, bool) {
+// of rawjson results. Returns (nil, false) if any element isn't a number.
+func collectNumbersFrom(values []rawjson.Result) ([]float64, bool) {
 	nums := make([]float64, 0, len(values))
 	for _, v := range values {
-		if v.Type != gjson.Number {
+		if v.Type != rawjson.Number {
 			return nil, false
 		}
 		nums = append(nums, v.Float())
@@ -201,20 +201,20 @@ func collectNumbersFrom(values []gjson.Result) ([]float64, bool) {
 	return nums, true
 }
 
-func evalFuncExists(_ *gjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
+func evalFuncExists(_ *rawjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
 	return true, true, nil
 }
 
-func evalFuncContains(r *gjson.Result, f *parser.FuncFastPath) (result any, handled bool, err error) {
+func evalFuncContains(r *rawjson.Result, f *parser.FuncFastPath) (result any, handled bool, err error) {
 	//nolint:exhaustive // only handle types relevant to this fast path
 	switch r.Type {
-	case gjson.String:
+	case rawjson.String:
 		return strings.Contains(r.Str, f.StrArg), true, nil
-	case gjson.JSON:
+	case rawjson.JSON:
 		if isJSONArray(r) {
 			found := false
-			r.ForEach(func(_, elem gjson.Result) bool {
-				if elem.Type == gjson.String && strings.Contains(elem.Str, f.StrArg) {
+			r.ForEach(func(_, elem rawjson.Result) bool {
+				if elem.Type == rawjson.String && strings.Contains(elem.Str, f.StrArg) {
 					found = true
 					return false
 				}
@@ -228,69 +228,69 @@ func evalFuncContains(r *gjson.Result, f *parser.FuncFastPath) (result any, hand
 	}
 }
 
-func evalFuncString(r *gjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
+func evalFuncString(r *rawjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
 	switch r.Type {
-	case gjson.String:
+	case rawjson.String:
 		return r.Str, true, nil
-	case gjson.Number:
+	case rawjson.Number:
 		return evaluator.FormatNumber(json.Number(r.Raw)), true, nil
-	case gjson.True:
+	case rawjson.True:
 		return "true", true, nil
-	case gjson.False:
+	case rawjson.False:
 		return "false", true, nil
-	case gjson.Null:
+	case rawjson.Null:
 		return parser.NullJSON, true, nil
-	case gjson.JSON:
+	case rawjson.JSON:
 		return nil, false, nil
 	default:
 		return nil, false, nil
 	}
 }
 
-func evalFuncBoolean(r *gjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
+func evalFuncBoolean(r *rawjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
 	switch r.Type {
-	case gjson.True:
+	case rawjson.True:
 		return true, true, nil
-	case gjson.False:
+	case rawjson.False:
 		return false, true, nil
-	case gjson.Null:
+	case rawjson.Null:
 		return false, true, nil
-	case gjson.String:
+	case rawjson.String:
 		return r.Str != "", true, nil
-	case gjson.Number:
+	case rawjson.Number:
 		return r.Float() != 0, true, nil
-	case gjson.JSON:
+	case rawjson.JSON:
 		return nil, false, nil
 	default:
 		return nil, false, nil
 	}
 }
 
-func evalFuncNumber(r *gjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
+func evalFuncNumber(r *rawjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
 	//nolint:exhaustive // only handle types relevant to this fast path
 	switch r.Type {
-	case gjson.Number:
+	case rawjson.Number:
 		return r.Float(), true, nil
-	case gjson.String:
+	case rawjson.String:
 		v, parseErr := strconv.ParseFloat(r.Str, 64)
 		if parseErr != nil || math.IsInf(v, 0) || math.IsNaN(v) {
 			// Fall through to full evaluator on parse failure or non-finite value.
 			return nil, false, nil //nolint:nilerr // intentional: signal fallback, not a real error
 		}
 		return v, true, nil
-	case gjson.True:
+	case rawjson.True:
 		return float64(1), true, nil
-	case gjson.False:
+	case rawjson.False:
 		return float64(0), true, nil
 	default:
 		return nil, false, nil
 	}
 }
 
-func evalFuncKeys(r *gjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
+func evalFuncKeys(r *rawjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
 	if isJSONObject(r) {
 		var keys []any
-		r.ForEach(func(key, _ gjson.Result) bool {
+		r.ForEach(func(key, _ rawjson.Result) bool {
 			keys = append(keys, key.String())
 			return true
 		})
@@ -306,26 +306,26 @@ func evalFuncKeys(r *gjson.Result, _ *parser.FuncFastPath) (result any, handled 
 	return nil, false, nil
 }
 
-func evalFuncDistinct(r *gjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
+func evalFuncDistinct(r *rawjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
 	if isJSONArray(r) {
 		seen := map[string]struct{}{}
 		out := make([]any, 0)
 		hasComplex := false
 		inputLen := 0
-		r.ForEach(func(_, elem gjson.Result) bool {
+		r.ForEach(func(_, elem rawjson.Result) bool {
 			inputLen++
 			var key string
 			//nolint:exhaustive // only handle scalar types; complex types fall through
 			switch elem.Type {
-			case gjson.Number:
+			case rawjson.Number:
 				key = strconv.FormatFloat(elem.Float(), 'f', -1, 64)
-			case gjson.String:
+			case rawjson.String:
 				key = "s:" + elem.Str
-			case gjson.True:
+			case rawjson.True:
 				key = "b:true"
-			case gjson.False:
+			case rawjson.False:
 				key = "b:false"
-			case gjson.Null:
+			case rawjson.Null:
 				key = parser.NullJSON
 			default:
 				hasComplex = true
@@ -333,7 +333,7 @@ func evalFuncDistinct(r *gjson.Result, _ *parser.FuncFastPath) (result any, hand
 			}
 			if _, dup := seen[key]; !dup {
 				seen[key] = struct{}{}
-				out = append(out, gjsonValueToAny(&elem))
+				out = append(out, rawValueToAny(&elem))
 			}
 			return true
 		})
@@ -352,64 +352,64 @@ func evalFuncDistinct(r *gjson.Result, _ *parser.FuncFastPath) (result any, hand
 	return nil, false, nil
 }
 
-func evalFuncNot(r *gjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
+func evalFuncNot(r *rawjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
 	switch r.Type {
-	case gjson.True:
+	case rawjson.True:
 		return false, true, nil
-	case gjson.False:
+	case rawjson.False:
 		return true, true, nil
-	case gjson.Null:
+	case rawjson.Null:
 		return true, true, nil
-	case gjson.String:
+	case rawjson.String:
 		return r.Str == "", true, nil
-	case gjson.Number:
+	case rawjson.Number:
 		return r.Float() == 0, true, nil
-	case gjson.JSON:
+	case rawjson.JSON:
 		return nil, false, nil
 	default:
 		return nil, false, nil
 	}
 }
 
-func evalFuncLowercase(r *gjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
-	if r.Type == gjson.String {
+func evalFuncLowercase(r *rawjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
+	if r.Type == rawjson.String {
 		return strings.ToLower(r.Str), true, nil
 	}
 	return nil, false, nil
 }
 
-func evalFuncUppercase(r *gjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
-	if r.Type == gjson.String {
+func evalFuncUppercase(r *rawjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
+	if r.Type == rawjson.String {
 		return strings.ToUpper(r.Str), true, nil
 	}
 	return nil, false, nil
 }
 
-func evalFuncTrim(r *gjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
-	if r.Type == gjson.String {
+func evalFuncTrim(r *rawjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
+	if r.Type == rawjson.String {
 		return strings.Join(strings.Fields(r.Str), " "), true, nil
 	}
 	return nil, false, nil
 }
 
-func evalFuncLength(r *gjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
-	if r.Type == gjson.String {
+func evalFuncLength(r *rawjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
+	if r.Type == rawjson.String {
 		return float64(utf8.RuneCountInString(r.Str)), true, nil
 	}
 	return nil, false, nil
 }
 
-func evalFuncType(r *gjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
+func evalFuncType(r *rawjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
 	switch r.Type {
-	case gjson.String:
+	case rawjson.String:
 		return "string", true, nil
-	case gjson.Number:
+	case rawjson.Number:
 		return "number", true, nil
-	case gjson.True, gjson.False:
+	case rawjson.True, rawjson.False:
 		return "boolean", true, nil
-	case gjson.Null:
+	case rawjson.Null:
 		return parser.NullJSON, true, nil
-	case gjson.JSON:
+	case rawjson.JSON:
 		if r.Raw != "" {
 			switch r.Raw[0] {
 			case '[':
@@ -424,29 +424,29 @@ func evalFuncType(r *gjson.Result, _ *parser.FuncFastPath) (result any, handled 
 	}
 }
 
-func evalFuncAbs(r *gjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
-	if r.Type == gjson.Number {
+func evalFuncAbs(r *rawjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
+	if r.Type == rawjson.Number {
 		return math.Abs(r.Float()), true, nil
 	}
 	return nil, false, nil
 }
 
-func evalFuncFloor(r *gjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
-	if r.Type == gjson.Number {
+func evalFuncFloor(r *rawjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
+	if r.Type == rawjson.Number {
 		return math.Floor(r.Float()), true, nil
 	}
 	return nil, false, nil
 }
 
-func evalFuncCeil(r *gjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
-	if r.Type == gjson.Number {
+func evalFuncCeil(r *rawjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
+	if r.Type == rawjson.Number {
 		return math.Ceil(r.Float()), true, nil
 	}
 	return nil, false, nil
 }
 
-func evalFuncSqrt(r *gjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
-	if r.Type == gjson.Number {
+func evalFuncSqrt(r *rawjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
+	if r.Type == rawjson.Number {
 		v := r.Float()
 		if v < 0 {
 			return nil, false, nil
@@ -456,10 +456,10 @@ func evalFuncSqrt(r *gjson.Result, _ *parser.FuncFastPath) (result any, handled 
 	return nil, false, nil
 }
 
-func evalFuncCount(r *gjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
+func evalFuncCount(r *rawjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
 	if isJSONArray(r) {
 		count := 0
-		r.ForEach(func(_, _ gjson.Result) bool {
+		r.ForEach(func(_, _ rawjson.Result) bool {
 			count++
 			return true
 		})
@@ -468,11 +468,11 @@ func evalFuncCount(r *gjson.Result, _ *parser.FuncFastPath) (result any, handled
 	return float64(1), true, nil
 }
 
-func evalFuncReverse(r *gjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
+func evalFuncReverse(r *rawjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
 	if isJSONArray(r) {
 		elems := make([]any, 0)
-		r.ForEach(func(_, elem gjson.Result) bool {
-			elems = append(elems, gjsonValueToAny(&elem))
+		r.ForEach(func(_, elem rawjson.Result) bool {
+			elems = append(elems, rawValueToAny(&elem))
 			return true
 		})
 		slices.Reverse(elems)
@@ -481,7 +481,7 @@ func evalFuncReverse(r *gjson.Result, _ *parser.FuncFastPath) (result any, handl
 	return nil, false, nil
 }
 
-func evalFuncSum(r *gjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
+func evalFuncSum(r *rawjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
 	if isJSONArray(r) {
 		nums, ok := collectNumbers(r)
 		if !ok {
@@ -496,7 +496,7 @@ func evalFuncSum(r *gjson.Result, _ *parser.FuncFastPath) (result any, handled b
 	return nil, false, nil
 }
 
-func evalFuncMax(r *gjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
+func evalFuncMax(r *rawjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
 	if isJSONArray(r) {
 		nums, ok := collectNumbers(r)
 		if !ok {
@@ -510,7 +510,7 @@ func evalFuncMax(r *gjson.Result, _ *parser.FuncFastPath) (result any, handled b
 	return nil, false, nil
 }
 
-func evalFuncMin(r *gjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
+func evalFuncMin(r *rawjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
 	if isJSONArray(r) {
 		nums, ok := collectNumbers(r)
 		if !ok {
@@ -524,7 +524,7 @@ func evalFuncMin(r *gjson.Result, _ *parser.FuncFastPath) (result any, handled b
 	return nil, false, nil
 }
 
-func evalFuncAverage(r *gjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
+func evalFuncAverage(r *rawjson.Result, _ *parser.FuncFastPath) (result any, handled bool, err error) {
 	if isJSONArray(r) {
 		nums, ok := collectNumbers(r)
 		if !ok || len(nums) == 0 {

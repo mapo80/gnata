@@ -15,13 +15,12 @@ import (
 	"errors"
 	"fmt"
 	"slices"
-	"strings"
 	"time"
 
 	"github.com/recolabs/gnata/functions"
 	"github.com/recolabs/gnata/internal/evaluator"
 	"github.com/recolabs/gnata/internal/parser"
-	"github.com/tidwall/gjson"
+	"github.com/recolabs/gnata/internal/rawjson"
 )
 
 // Expression is a compiled, reusable, goroutine-safe JSONata expression.
@@ -33,7 +32,7 @@ type Expression struct {
 	paths    []string
 	// pathSteps holds the un-escaped field names making up paths[0], used to
 	// walk the path step-by-step (auto-mapping through arrays) when the
-	// single dotted-path gjson lookup below can't resolve it directly.
+	// single dotted-path rawjson lookup below can't resolve it directly.
 	pathSteps []string
 	// cmpFast covers simple path-vs-literal comparisons (e.g. `a.b = "x"`).
 	// Non-nil when the expression qualifies; nil otherwise.
@@ -282,7 +281,7 @@ func (e *Expression) Eval(ctx context.Context, data any) (result any, err error)
 }
 
 // tryFastPathBytes attempts the pure-path (including the array-crossing
-// walker) and comparison gjson tiers, against either raw bytes or a
+// walker) and comparison rawjson tiers, against either raw bytes or a
 // pre-destructured map (exactly one of data / mapData should be non-nil,
 // mirroring resolveGjsonPath). Neither tier can ever name a function, so
 // this is safe to share across every EvalBytes*/EvalMap variant regardless
@@ -291,8 +290,8 @@ func (e *Expression) Eval(ctx context.Context, data any) (result any, err error)
 // neither tier could resolve the expression.
 func (e *Expression) tryFastPathBytes(data json.RawMessage, mapData map[string]json.RawMessage) (result any, handled bool, err error) {
 	if e.fastPath && len(e.paths) == 1 {
-		if res := resolveGjsonPath(data, mapData, e.paths[0]); res.Exists() {
-			return gjsonValueToAny(&res), true, nil
+		if res := resolvePath(data, mapData, e.pathSteps); res.Exists() {
+			return rawValueToAny(&res), true, nil
 		}
 		var v any
 		var ok bool
@@ -340,10 +339,10 @@ func (e *Expression) tryFuncFastBytes(data json.RawMessage, mapData map[string]j
 
 // EvalBytes evaluates the expression against raw JSON bytes.
 //
-//   - Pure-path fast path: zero-copy GJSON extraction (e.g. "Account.Name").
+//   - Pure-path fast path: zero-copy rawjson extraction (e.g. "Account.Name").
 //     When the path crosses one or more arrays (e.g. "Account.Order.Product.Price"),
-//     a step-by-step gjson walk auto-maps through them without decoding the document.
-//   - Comparison fast path: single gjson scan for path-vs-literal comparisons.
+//     a step-by-step rawjson walk auto-maps through them without decoding the document.
+//   - Comparison fast path: single rawjson scan for path-vs-literal comparisons.
 //   - Complex expressions: json.Unmarshal + full AST evaluation.
 func (e *Expression) EvalBytes(ctx context.Context, data json.RawMessage) (result any, err error) {
 	defer recoverEvalPanic(&err)
@@ -361,7 +360,7 @@ func (e *Expression) EvalBytes(ctx context.Context, data json.RawMessage) (resul
 }
 
 // EvalMap evaluates the expression against a map of field names to raw JSON values.
-// This enables O(1) top-level key lookup with gjson fast paths for nested access,
+// This enables O(1) top-level key lookup with rawjson fast paths for nested access,
 // making it ideal for pre-destructured data (e.g. database columns, form fields).
 func (e *Expression) EvalMap(ctx context.Context, data map[string]json.RawMessage) (result any, err error) {
 	defer recoverEvalPanic(&err)
@@ -379,7 +378,7 @@ func (e *Expression) EvalMap(ctx context.Context, data map[string]json.RawMessag
 }
 
 // EvalBytesWithVars evaluates the expression against raw JSON bytes with extra
-// variable bindings. Combines the gjson fast-path cascade from EvalBytes with
+// variable bindings. Combines the rawjson fast-path cascade from EvalBytes with
 // the variable support from EvalWithVars.
 func (e *Expression) EvalBytesWithVars(ctx context.Context, data json.RawMessage, vars map[string]any) (result any, err error) {
 	defer recoverEvalPanic(&err)
@@ -398,7 +397,7 @@ func (e *Expression) EvalBytesWithVars(ctx context.Context, data json.RawMessage
 
 // EvalBytesWithCustomFuncs evaluates raw JSON bytes using a custom
 // environment. The env parameter should be created via NewCustomEnv.
-// Combines the pure-path/comparison gjson tiers from EvalBytes with the
+// Combines the pure-path/comparison rawjson tiers from EvalBytes with the
 // custom environment support from EvalWithCustomFuncs. Deliberately skips
 // the function fast path (see tryFuncFastBytes): a caller-supplied
 // environment can register a function under a name that shadows a
@@ -422,7 +421,7 @@ func (e *Expression) EvalBytesWithCustomFuncs(
 // pre-built custom environment and per-call variable bindings. Construct the
 // environment once via NewCustomEnvironment and reuse it across evaluations,
 // same as EvalWithCustomEnvironmentAndVars. Combines the pure-path/comparison
-// gjson tiers from EvalBytes with that decoded-input API's custom-function
+// rawjson tiers from EvalBytes with that decoded-input API's custom-function
 // and $-variable support. Deliberately skips the function fast path — see
 // EvalBytesWithCustomFuncs and tryFuncFastBytes for why.
 func (e *Expression) EvalBytesWithCustomEnvironmentAndVars(
@@ -446,31 +445,25 @@ func (e *Expression) EvalBytesWithCustomEnvironmentAndVars(
 	return e.evalCore(ctx, v, parent, vars)
 }
 
-// resolveGjsonPath resolves a gjson path from either raw bytes or a pre-decoded map.
-// When data is available (EvalMany), it delegates to gjson.GetBytes on the full blob.
-// When mapData is available (EvalMap), it does an O(1) map lookup for the top-level
-// key, then uses gjson on the nested value bytes — skipping sibling keys entirely.
-// Paths containing gjson special characters fall through to return an empty result,
-// letting the caller fall back to full AST evaluation.
-func resolveGjsonPath(data json.RawMessage, mapData map[string]json.RawMessage, path string) gjson.Result {
+// resolvePath resolves the field names of a pure path from either raw bytes
+// or a pre-decoded map, without crossing arrays (a numeric step indexes an
+// array). When mapData is available (EvalMap), the first step is an O(1) map
+// lookup for the top-level key and the rest is read in that value's bytes —
+// skipping sibling keys entirely. The Result does not exist when a step
+// finds nothing or the bytes are not valid JSON, letting the caller try the
+// array-crossing walker and then the full evaluation.
+func resolvePath(data json.RawMessage, mapData map[string]json.RawMessage, steps []string) rawjson.Result {
 	if data != nil {
-		return gjson.GetBytes(data, path)
+		return rawjson.Get(data, steps)
 	}
-	if mapData == nil {
-		return gjson.Result{}
+	if mapData == nil || len(steps) == 0 {
+		return rawjson.Result{}
 	}
-	if strings.ContainsAny(path, `\#*?@`) {
-		return gjson.Result{}
-	}
-	key, rest, hasDot := strings.Cut(path, ".")
-	raw, ok := mapData[key]
+	raw, ok := mapData[steps[0]]
 	if !ok {
-		return gjson.Result{}
+		return rawjson.Result{}
 	}
-	if !hasDot {
-		return gjson.ParseBytes(raw)
-	}
-	return gjson.GetBytes(raw, rest)
+	return rawjson.Get(raw, steps[1:])
 }
 
 // evalComparison evaluates a pre-compiled comparison fast path against raw JSON
@@ -483,19 +476,19 @@ func resolveGjsonPath(data json.RawMessage, mapData map[string]json.RawMessage, 
 func evalComparison(
 	c *parser.ComparisonFastPath, data json.RawMessage, mapData map[string]json.RawMessage,
 ) (result any, handled bool, err error) {
-	lhs := resolveGjsonPath(data, mapData, c.LHSPath)
+	lhs := resolvePath(data, mapData, c.LHSPathSteps)
 	if lhs.Exists() {
 		match, ok := matchComparison(&lhs, c)
 		return match, ok, nil
 	}
-	// gjson couldn't resolve the path. This could be because the path is
+	// rawjson couldn't resolve the path. This could be because the path is
 	// truly undefined OR because an intermediate element is a JSON array
-	// (gjson doesn't auto-map through arrays, but JSONata does). Walk the
+	// (rawjson doesn't auto-map through arrays, but JSONata does). Walk the
 	// path step-by-step so the array case still avoids a full document decode.
 	if len(c.LHSPathSteps) == 0 {
 		return nil, false, nil
 	}
-	var values []gjson.Result
+	var values []rawjson.Result
 	var ok bool
 	switch {
 	case data != nil:
@@ -516,21 +509,21 @@ func evalComparison(
 	return match, ok, nil
 }
 
-// matchComparison evaluates a single resolved gjson value against a
+// matchComparison evaluates a single resolved rawjson value against a
 // pre-compiled comparison literal. JSON arrays and objects are never equal
 // to a primitive literal regardless of the literal's type; JSONata's
 // equality operator does structural, not any-element, comparison.
 // ok is false only for an unrecognized RHSKind, which never occurs today
 // since the parser only ever produces the four known kinds.
-func matchComparison(lhs *gjson.Result, c *parser.ComparisonFastPath) (match, ok bool) {
-	if lhs.Type == gjson.JSON {
+func matchComparison(lhs *rawjson.Result, c *parser.ComparisonFastPath) (match, ok bool) {
+	if lhs.Type == rawjson.JSON {
 		return c.Op == "!=", true
 	}
 	switch c.RHSKind {
 	case parser.RHSKindString:
-		match = lhs.Type == gjson.String && lhs.String() == c.RHSString
+		match = lhs.Type == rawjson.String && lhs.String() == c.RHSString
 	case parser.RHSKindNumber:
-		if lhs.Type != gjson.Number {
+		if lhs.Type != rawjson.Number {
 			break
 		}
 		if isCanonicalInteger(lhs.Raw) && isCanonicalInteger(c.RHSNumberStr) {
@@ -540,12 +533,12 @@ func matchComparison(lhs *gjson.Result, c *parser.ComparisonFastPath) (match, ok
 		}
 	case parser.RHSKindBool:
 		if c.RHSBool {
-			match = lhs.Type == gjson.True
+			match = lhs.Type == rawjson.True
 		} else {
-			match = lhs.Type == gjson.False
+			match = lhs.Type == rawjson.False
 		}
 	case parser.RHSKindNull:
-		match = lhs.Type == gjson.Null
+		match = lhs.Type == rawjson.Null
 	default:
 		return false, false
 	}
@@ -555,24 +548,24 @@ func matchComparison(lhs *gjson.Result, c *parser.ComparisonFastPath) (match, ok
 	return match, true
 }
 
-// gjsonValueToAny converts a gjson.Result to a native Go value.
-func gjsonValueToAny(r *gjson.Result) any {
+// rawValueToAny converts a rawjson.Result to a native Go value.
+func rawValueToAny(r *rawjson.Result) any {
 	switch r.Type {
-	case gjson.Null:
+	case rawjson.Null:
 		return evaluator.Null
-	case gjson.True:
+	case rawjson.True:
 		return true
-	case gjson.False:
+	case rawjson.False:
 		return false
-	case gjson.Number:
+	case rawjson.Number:
 		if raw := r.Raw; isCanonicalInteger(raw) {
 			return json.Number(raw)
 		}
 		return r.Float()
-	case gjson.String:
+	case rawjson.String:
 		return r.String()
-	case gjson.JSON:
-		if v, err := evaluator.DecodeJSON(json.RawMessage(r.Raw)); err == nil {
+	case rawjson.JSON:
+		if v, err := evaluator.DecodeJSON(r.Bytes()); err == nil {
 			return v
 		}
 		return nil
@@ -615,24 +608,24 @@ func (e *Expression) EvalWithVars(ctx context.Context, data any, vars map[string
 	return e.evalCore(ctx, data, builtinEnv, vars)
 }
 
-// IsFastPath reports whether this expression uses the zero-copy GJSON pure-path fast path.
+// IsFastPath reports whether this expression uses the zero-copy rawjson pure-path fast path.
 func (e *Expression) IsFastPath() bool {
 	return e.fastPath
 }
 
 // IsFuncFastPath reports whether this expression uses the function fast path
-// (a built-in function applied to a pure path, evaluated via gjson).
+// (a built-in function applied to a pure path, evaluated via rawjson).
 func (e *Expression) IsFuncFastPath() bool {
 	return e.funcFast != nil
 }
 
 // IsComparisonFastPath reports whether this expression uses the comparison fast path
-// (a pure path compared to a literal, evaluated via gjson).
+// (a pure path compared to a literal, evaluated via rawjson).
 func (e *Expression) IsComparisonFastPath() bool {
 	return e.cmpFast != nil
 }
 
-// RequiredPaths returns the GJSON paths this expression needs (fast-path only).
+// RequiredPaths returns the dotted paths (GJSON path syntax) this expression needs (fast-path only).
 func (e *Expression) RequiredPaths() []string {
 	return e.paths
 }

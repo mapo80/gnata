@@ -252,7 +252,7 @@ func (se *StreamEvaluator) EvalMap(
 //   - exprIndices: which compiled expressions to evaluate.
 //
 // Returns results[i] = evaluation of expressions[exprIndices[i]], or nil for undefined.
-// GJSON fast paths require raw JSON bytes and are not used; evaluation uses the AST.
+// rawjson fast paths require raw JSON bytes and are not used; evaluation uses the AST.
 func (se *StreamEvaluator) EvalPreparsed(
 	ctx context.Context, data any, schemaKey string, exprIndices []int,
 ) ([]any, error) {
@@ -358,12 +358,12 @@ func (b *evalBatch) tryFastPaths(i, idx int, start time.Time) (result any, done 
 	}
 
 	if b.plan != nil && i < len(b.plan.ExprFastPath) && b.plan.ExprFastPath[i] && b.plan.FastPaths[i] != "" {
-		r := resolveGjsonPath(b.data, b.mapData, b.plan.FastPaths[i])
+		r := resolvePath(b.data, b.mapData, b.plan.FastPathSteps[i])
 		if r.Exists() {
 			if b.se.metrics != nil {
 				b.se.metrics.OnEval(idx, true, time.Since(start), nil)
 			}
-			return gjsonValueToAny(&r), true, nil
+			return rawValueToAny(&r), true, nil
 		}
 	}
 
@@ -467,10 +467,11 @@ func planCacheKey(schemaKey string, exprIndices []int) string {
 // buildPlan constructs a GroupPlan for the given expression indices.
 func buildPlan(expressions []*Expression, exprIndices []int) *GroupPlan {
 	plan := &GroupPlan{
-		FastPaths:    make([]string, len(exprIndices)),
-		ExprFastPath: make([]bool, len(exprIndices)),
-		CmpFast:      make([]*parser.ComparisonFastPath, len(exprIndices)),
-		FuncFast:     make([]*parser.FuncFastPath, len(exprIndices)),
+		FastPaths:     make([]string, len(exprIndices)),
+		FastPathSteps: make([][]string, len(exprIndices)),
+		ExprFastPath:  make([]bool, len(exprIndices)),
+		CmpFast:       make([]*parser.ComparisonFastPath, len(exprIndices)),
+		FuncFast:      make([]*parser.FuncFastPath, len(exprIndices)),
 	}
 	hasPure, hasCmp, hasFunc := false, false, false
 	for i, idx := range exprIndices {
@@ -485,6 +486,7 @@ func buildPlan(expressions []*Expression, exprIndices []int) *GroupPlan {
 		case expr.fastPath && len(expr.paths) == 1:
 			plan.ExprFastPath[i] = true
 			plan.FastPaths[i] = expr.paths[0]
+			plan.FastPathSteps[i] = expr.pathSteps
 			hasPure = true
 		case expr.cmpFast != nil:
 			plan.CmpFast[i] = expr.cmpFast
@@ -496,6 +498,7 @@ func buildPlan(expressions []*Expression, exprIndices []int) *GroupPlan {
 	}
 	if !hasPure {
 		plan.FastPaths = nil
+		plan.FastPathSteps = nil
 		plan.ExprFastPath = nil
 	}
 	if !hasCmp {
