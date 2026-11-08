@@ -145,11 +145,30 @@ func fnMerge(args []any, _ any) (any, error) {
 		}
 		return nil, &evaluator.JSONataError{Code: "T0410", Message: "$merge: argument must be an array of objects"}
 	}
-	result := evaluator.NewOrderedMap()
+	// The result is sized for every member once: merging a frame of many
+	// members with a few changes grew the result's keys and table step by
+	// step (the most allocating call of the engine's generated controllers).
+	// A first ordered object is copied whole, keys in its order, as the
+	// member-by-member copy did.
+	size := 0
 	for _, item := range arr {
 		if !evaluator.IsMap(item) {
 			return nil, &evaluator.JSONataError{Code: "T0412", Message: "$merge: array elements must be objects"}
 		}
+		size += evaluator.MapLen(item)
+	}
+	var result *evaluator.OrderedMap
+	rest := arr
+	if len(arr) == 0 {
+		return evaluator.NewOrderedMap(), nil
+	}
+	if first, ok := arr[0].(*evaluator.OrderedMap); ok {
+		result = first.CloneWithCapacity(size)
+		rest = arr[1:]
+	} else {
+		result = evaluator.NewOrderedMapWithCapacity(size)
+	}
+	for _, item := range rest {
 		evaluator.MapRange(item, func(k string, v any) bool {
 			result.Set(k, v)
 			return true

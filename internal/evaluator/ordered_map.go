@@ -29,6 +29,18 @@ func NewOrderedMapWithCapacity(n int) *OrderedMap {
 	}
 }
 
+// CloneWithCapacity is a copy of m, keys in m's order, with room for n
+// members in all (n below m's length is m's length).
+func (m *OrderedMap) CloneWithCapacity(n int) *OrderedMap {
+	n = max(n, len(m.keys))
+	out := &OrderedMap{keys: make([]string, len(m.keys), n), data: make(map[string]any, n)}
+	copy(out.keys, m.keys)
+	for _, k := range m.keys {
+		out.data[k] = m.data[k]
+	}
+	return out
+}
+
 func (m *OrderedMap) Set(key string, val any) {
 	if _, exists := m.data[key]; !exists {
 		m.keys = append(m.keys, key)
