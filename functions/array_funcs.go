@@ -53,6 +53,11 @@ func fnAppend(args []any, _ any, env *evaluator.Environment) (any, error) {
 			Message: fmt.Sprintf("$append: result array exceeds maximum size of %d elements", maxAppendSize),
 		}
 	}
+	// JSONata returns an array even when it has no members. Concat's nil
+	// result for two empty arrays would instead encode as JSON null.
+	if len(a)+len(b) == 0 {
+		return []any{}, nil
+	}
 	return slices.Concat(a, b), nil
 }
 

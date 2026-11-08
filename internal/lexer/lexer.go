@@ -291,6 +291,12 @@ var simpleEscapeValid = [256]bool{
 // quote is either '"' or '\”.
 func (l *Lexer) scanString(quote byte, startPos int) (Token, error) {
 	l.pos++ // consume opening quote
+	// A literal without escapes is the source between its quotes.
+	if end := strings.IndexByte(l.src[l.pos:], quote); end >= 0 && strings.IndexByte(l.src[l.pos:l.pos+end], '\\') < 0 {
+		value := l.src[l.pos : l.pos+end]
+		l.pos += end + 1
+		return Token{Type: TokenString, Value: value, Pos: startPos}, nil
+	}
 	var sb strings.Builder
 	for l.pos < len(l.src) {
 		if c := l.src[l.pos]; c == quote {

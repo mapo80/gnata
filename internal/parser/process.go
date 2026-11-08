@@ -68,21 +68,18 @@ func ProcessAST(node *Node) (*Node, error) {
 	}
 }
 
-// processDotBinary flattens a binary(".") node into a path node.
+// processDotBinary flattens a binary(".") node into a path node, in place:
+// the binary node becomes the path of the steps of its operands.
 func processDotBinary(node *Node) (*Node, error) {
 	// Collect all steps from nested dots.
-	steps, err := collectPathSteps(node)
+	steps, err := appendPathSteps(nil, node)
 	if err != nil {
 		return nil, err
 	}
 
-	path := &Node{
-		Type:  NodePath,
-		Value: node.Value,
-		Steps: steps,
-		Pos:   node.Pos,
-		Group: node.Group, // propagate group-by expression (A.B{key:val})
-	}
+	// propagate group-by expression (A.B{key:val})
+	*node = Node{Type: NodePath, Value: node.Value, Steps: steps, Pos: node.Pos, Group: node.Group}
+	path := node
 	markUnaryArraySteps(steps)
 
 	// Propagate KeepSingletonArray when any step (or a subscript step's left side)
@@ -116,8 +113,9 @@ func processDotBinary(node *Node) (*Node, error) {
 	return path, nil
 }
 
-// collectPathSteps recursively collects steps from binary(".") nodes.
-func collectPathSteps(node *Node) ([]*Node, error) {
+// appendPathSteps recursively appends to steps the steps of binary(".")
+// nodes, in one slice for the whole path.
+func appendPathSteps(steps []*Node, node *Node) ([]*Node, error) {
 	if node.Type != NodeBinary || node.Value != "." {
 		// Leaf step — process it.
 		processed, err := ProcessAST(node)
@@ -126,20 +124,22 @@ func collectPathSteps(node *Node) ([]*Node, error) {
 		}
 		// If the processed node is itself a path, splice its steps.
 		if processed.Type == NodePath {
-			return processed.Steps, nil
+			return append(steps, processed.Steps...), nil
 		}
 		promoteQuotedPathNames(processed)
 		if processed.Type == NodeString {
-			processed = &Node{Type: NodeName, Value: processed.Value, Pos: processed.Pos}
+			*processed = Node{Type: NodeName, Value: processed.Value, Pos: processed.Pos}
 		}
-		return []*Node{processed}, nil
+		return append(steps, processed), nil
 	}
 
-	leftSteps, err := collectPathSteps(node.Left)
+	start := len(steps)
+	steps, err := appendPathSteps(steps, node.Left)
 	if err != nil {
 		return nil, err
 	}
-	rightSteps, err := collectPathSteps(node.Right)
+	lastLeft := len(steps) - 1
+	steps, err = appendPathSteps(steps, node.Right)
 	if err != nil {
 		return nil, err
 	}
@@ -147,8 +147,8 @@ func collectPathSteps(node *Node) ([]*Node, error) {
 	// The # and @ infix operators set Index/Focus on the binary "." node
 	// itself (e.g. (Account.Order)#$o). Propagate these to the last left
 	// step so the binding survives path flattening.
-	if len(leftSteps) > 0 {
-		last := leftSteps[len(leftSteps)-1]
+	if lastLeft >= start {
+		last := steps[lastLeft]
 		if node.Index != "" {
 			last.Index = node.Index
 		}
@@ -157,14 +157,14 @@ func collectPathSteps(node *Node) ([]*Node, error) {
 		}
 	}
 
-	return append(leftSteps, rightSteps...), nil
+	return steps, nil
 }
 
 func promoteQuotedPathNames(n *Node) {
 	for n != nil && n.Type == NodeBinary && n.Value == "[" {
 		if n.Left != nil && n.Left.Type == NodeString {
 			left := n.Left
-			n.Left = &Node{
+			*left = Node{
 				Type:      NodeName,
 				Value:     left.Value,
 				Pos:       left.Pos,
