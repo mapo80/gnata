@@ -10,11 +10,61 @@ Copyright (c) 2026 RecoLabs Inc. (`LICENSE`).
 
 | tag | base | branch |
 |---|---|---|
+| `v0.5.0-arc.4` | `v0.5.0-arc.3` + a smaller tree node | `arc/ast-node` (fast-forward of `arc/json-v2`) |
 | `v0.5.0-arc.3` | `v0.5.0-arc.2` + custom environments over the shared standard library | `arc/json-v2` |
 | `v0.5.0-arc.2` | `perf/v0.5.0` at `7fa870c99593` (upstream `v0.5.0` `775e5fbf` + "parser: flatten dotted paths into one step slice" + "functions: $append of two empty arrays returns an empty array"), the version ARC pinned as `v0.5.1-0.20261027144911-7fa870c99593` | `arc/json-v2` |
 
 `v0.5.0-arc.1` (branch `arc/perf`) is a separate line with other performance
 changes; `v0.5.0-arc.2` does not contain it.
+
+## Changes in `v0.5.0-arc.4`
+
+1. `perf: keep a tree node in the 144-byte size class` — `parser.Node` goes
+   from 384 to 144 bytes; nothing else changes in the trees.
+   - The fields most nodes use stay inline: type and flags, `Value`, `Pos`,
+     `NumVal`, `Left`, `Right`, `Procedure`, `Steps`, `Expressions`,
+     `Arguments`.
+   - The fields only some node types use (`Expression`, `Body`, `Condition`,
+     `Then`, `Else`, `Pattern`, `Update`, `Delete`, `LHS`, `Terms`,
+     `Signature`, `Focus`, `Index`, `Group`) move to one 160-byte structure,
+     allocated only for the nodes that have one of them (conditions, object
+     constructors, lambdas, sorts, transforms, unary minus, `@`, `#`, group
+     by) and read through methods of the same name. Writes happen only while
+     parsing; the evaluator copies a node without its group through
+     `WithoutGroup` instead of copying the struct, as before without
+     modifying the shared tree.
+   - `Type` is a `NodeType` (`uint8`) whose `String` returns the former
+     strings (`"path"`, `"binary"`, …, `"operator"` for the placeholder).
+   - Removed fields that nothing set or read: `Tuple`, `Slot`, `Stages`
+     (never set: the two `len(Stages) > 0` checks of the fast-path analysis
+     were always false and are dropped), `SeekingParent`,
+     `NextFunction`, with the types `Slot` and `Stage`.
+
+   Compiling the 1 652 expressions of the conformance suite that compile:
+   5 223 424 B → 2 415 296 B (−53.8 %), 33 118 → 33 712 objects. The 161
+   expressions ARC compiles in one turn of its benchmark conversation:
+   1 608 856 B → 699 416 B allocated (−56.5 %) and 1 559 568 B → 649 848 B
+   kept alive by the compiled expressions (−58.3 %).
+   `BenchmarkCompile` (Apple M2 Pro, go1.27.1, `-cpu 1`, 10 alternating runs
+   per side, machine shared with other loads, medians): bytes −48 to −58 %,
+   same allocation counts, time −17 to −21 %. `BenchmarkEval`: same bytes and
+   allocations, time −1.2 % to +1.7 % (within the spread of the runs).
+   In ARC (one benchmark conversation, turn 2, exact profile)
+   `expression.compileShared` allocates 1 583.3 KB → 695.7 KB per turn.
+
+   Tests: `TestASTNodeSize` (384 bytes before, red; at most 144) and
+   `TestCompileAllocatesTheTreeOnce` (5 223 424 B before, red; at most
+   2 700 000 B). `internal/parser` tests that compared `Type` with string
+   literals compare `Type.String()`; their cases are unchanged.
+
+   Equivalence (probe, not committed): for 1 846 cases (the 1 685 cases of
+   the conformance suite and the 161 ARC expressions) a dump of every
+   compiled tree, field by field with the moved fields read back in place,
+   and every outcome (compile error text, eval result as JSON with its Go
+   type, eval error text) are byte-identical between `v0.5.0-arc.3` and this
+   change. Suite green with `go test ./...`, under `-race` (except
+   `TestEvalBytes_ArrayAutoMap_NoFullDecode`, which counts allocations and
+   fails under `-race` on `v0.5.0-arc.3` too) and as js/wasm under Node.
 
 ## Changes in `v0.5.0-arc.3`
 
