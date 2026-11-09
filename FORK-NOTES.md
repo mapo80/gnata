@@ -10,10 +10,31 @@ Copyright (c) 2026 RecoLabs Inc. (`LICENSE`).
 
 | tag | base | branch |
 |---|---|---|
+| `v0.5.0-arc.3` | `v0.5.0-arc.2` + custom environments over the shared standard library | `arc/json-v2` |
 | `v0.5.0-arc.2` | `perf/v0.5.0` at `7fa870c99593` (upstream `v0.5.0` `775e5fbf` + "parser: flatten dotted paths into one step slice" + "functions: $append of two empty arrays returns an empty array"), the version ARC pinned as `v0.5.1-0.20261027144911-7fa870c99593` | `arc/json-v2` |
 
 `v0.5.0-arc.1` (branch `arc/perf`) is a separate line with other performance
 changes; `v0.5.0-arc.2` does not contain it.
+
+## Changes in `v0.5.0-arc.3`
+
+1. `perf: build custom environments over the shared standard library` —
+   `NewCustomEnvironment`, `NewCustomEnv` and the stream evaluator's custom
+   environment are a child of `builtinEnv` (the library registered once, at
+   init) binding only the custom functions, instead of a new root that
+   registers the whole library again. A custom function still shadows the
+   standard one of the same name; every evaluation still binds its variables
+   in a child with its own call counter (`evalCore`), so environments are
+   shared read-only as before. Building an environment of 20 functions: 10 154
+   B, 48 allocations, 4.9 µs → 2 568 B, 28 allocations, 1.2 µs
+   (`BenchmarkNewCustomEnvironment`, Apple M2 Pro, go1.27.1, 3 runs).
+   ARC builds one per turn and zone; with concurrent conversations its
+   environments were rebuilt per evaluation (about 20 KB each).
+   Tests: `TestCustomEnvironmentOverTheSharedLibrary` (shadowing, standard
+   functions, `%`, lambdas, recursion, variables; green before and after),
+   `TestCustomEnvironmentsEvaluateConcurrently` (64 environments, race),
+   `TestCustomEnvironmentDoesNotRegisterTheLibraryAgain` (31 allocations
+   before, red; within 12 after).
 
 ## Changes in `v0.5.0-arc.2`
 

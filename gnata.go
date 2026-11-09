@@ -130,6 +130,9 @@ type CustomEnvironment struct {
 
 // NewCustomEnvironment pre-builds a reusable environment for a stable set of
 // custom functions. Each evaluation creates a child environment for variables.
+// The environment binds only the custom functions, over the shared standard
+// library (builtinEnv): a custom function shadows a standard one of the same
+// name, and building an environment does not register the library again.
 func NewCustomEnvironment(customFuncs map[string]CustomFunc) *CustomEnvironment {
 	return &CustomEnvironment{env: newEnv(customFuncs)}
 }
@@ -139,14 +142,16 @@ func NewCustomEnvironment(customFuncs map[string]CustomFunc) *CustomEnvironment 
 var builtinEnv *evaluator.Environment
 
 func init() {
-	builtinEnv = newEnv(nil)
+	builtinEnv = evaluator.NewEnvironment()
+	functions.RegisterAll(builtinEnv, evaluator.ApplyFunction)
 }
 
-// newEnv creates a root environment with all standard library functions
-// and optional custom functions registered.
+// newEnv creates the environment of the custom functions: a child of
+// builtinEnv, the standard library registered once, binding only them.
+// Evaluations never write to it: each one binds its variables in a child
+// with its own call counter (evalCore).
 func newEnv(customFuncs map[string]CustomFunc) *evaluator.Environment {
-	env := evaluator.NewEnvironment()
-	functions.RegisterAll(env, evaluator.ApplyFunction)
+	env := evaluator.NewChildEnvironment(builtinEnv)
 	for name, fn := range customFuncs {
 		wrapped := wrapCustomFunc(fn)
 		env.Bind(name, evaluator.BuiltinFunction(wrapped))
@@ -581,9 +586,8 @@ func (e *Expression) EvalWithCustomFuncs(ctx context.Context, data any, env *eva
 
 // EvalWithCustomEnvironmentAndVars evaluates with a pre-built custom
 // environment and per-call variable bindings. Construct the environment once
-// via NewCustomEnvironment and reuse it across calls — rebuilding the
-// environment per evaluation re-registers the entire standard library and is
-// significantly more expensive than the per-call variable bind below.
+// via NewCustomEnvironment and reuse it across calls: building one binds every
+// custom function, more than the per-call variable bind below.
 func (e *Expression) EvalWithCustomEnvironmentAndVars(
 	ctx context.Context,
 	data any,
@@ -596,8 +600,9 @@ func (e *Expression) EvalWithCustomEnvironmentAndVars(
 	return e.evalCore(ctx, data, customEnv.env, vars)
 }
 
-// NewCustomEnv creates a root environment with all standard library functions
-// plus the provided custom functions. The returned environment is goroutine-safe
+// NewCustomEnv creates an environment with the provided custom functions over
+// the shared standard library (a child of it: a custom function shadows a
+// standard one of the same name). The returned environment is goroutine-safe
 // for concurrent reads and should be reused across evaluations.
 func NewCustomEnv(customFuncs map[string]CustomFunc) *evaluator.Environment {
 	return newEnv(customFuncs)
