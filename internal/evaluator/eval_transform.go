@@ -57,7 +57,7 @@ func applyTransform(node *parser.Node, input any, env *Environment) (any, error)
 	}
 	cloned := deepClone(input)
 
-	matched, err := Eval(node.Pattern, cloned, env)
+	matched, err := Eval(node.Pattern(), cloned, env)
 	if err != nil {
 		return nil, err
 	}
@@ -93,15 +93,15 @@ func applyTransform(node *parser.Node, input any, env *Environment) (any, error)
 // validateTransformClauses evaluates update/delete clauses for type-checking only,
 // without mutating the target. Used when the pattern matches a non-object value.
 func validateTransformClauses(node *parser.Node, target any, env *Environment) error {
-	if node.Update != nil {
-		if updateVal, err := Eval(node.Update, target, env); err != nil {
+	if node.Update() != nil {
+		if updateVal, err := Eval(node.Update(), target, env); err != nil {
 			return err
 		} else if updateVal != nil && !IsNull(updateVal) && !IsMap(updateVal) {
 			return &errTransformUpdate
 		}
 	}
-	if node.Delete != nil {
-		if deleteVal, err := Eval(node.Delete, target, env); err != nil {
+	if node.Delete() != nil {
+		if deleteVal, err := Eval(node.Delete(), target, env); err != nil {
 			return err
 		} else if deleteVal != nil && !IsNull(deleteVal) {
 			switch deleteVal.(type) {
@@ -115,8 +115,8 @@ func validateTransformClauses(node *parser.Node, target any, env *Environment) e
 }
 
 func applyTransformTarget(node *parser.Node, target any, env *Environment) error {
-	if node.Update != nil {
-		if updateVal, err := Eval(node.Update, target, env); err != nil {
+	if node.Update() != nil {
+		if updateVal, err := Eval(node.Update(), target, env); err != nil {
 			return err
 		} else if updateVal != nil && !IsNull(updateVal) {
 			if !IsMap(updateVal) {
@@ -125,8 +125,8 @@ func applyTransformTarget(node *parser.Node, target any, env *Environment) error
 			transformMerge(target, updateVal)
 		}
 	}
-	if node.Delete != nil {
-		if deleteVal, err := Eval(node.Delete, target, env); err != nil {
+	if node.Delete() != nil {
+		if deleteVal, err := Eval(node.Delete(), target, env); err != nil {
 			return err
 		} else if deleteVal != nil && !IsNull(deleteVal) {
 			switch dv := deleteVal.(type) {

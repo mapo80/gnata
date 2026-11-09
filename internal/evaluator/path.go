@@ -28,13 +28,13 @@ func evalPath(node *parser.Node, input any, env *Environment) (any, error) {
 // left-hand node has an Index, or any step/sub-expression references NodeParent (%).
 func pathHasTupleStep(steps []*parser.Node) bool {
 	for _, step := range steps {
-		if step.Index != "" || step.Focus != "" {
+		if step.Index() != "" || step.Focus() != "" {
 			return true
 		}
 		// A subscript step whose left child has an Index or Focus binding also requires
 		// tuple-aware path evaluation so each element gets its own env for $pos/$var.
 		if step.Type == parser.NodeBinary && step.Value == "[" &&
-			step.Left != nil && (step.Left.Index != "" || step.Left.Focus != "") {
+			step.Left != nil && (step.Left.Index() != "" || step.Left.Focus() != "") {
 			return true
 		}
 		// A sort step whose Left is a path containing #$var bindings needs tuple
@@ -58,7 +58,7 @@ func nodeHasIndexBinding(node *parser.Node) bool {
 	if node == nil {
 		return false
 	}
-	if node.Index != "" || node.Focus != "" {
+	if node.Index() != "" || node.Focus() != "" {
 		return true
 	}
 	if nodeHasIndexBinding(node.Left) || nodeHasIndexBinding(node.Right) {
@@ -89,14 +89,14 @@ func nodeHasParentRef(node *parser.Node) bool {
 		(node.Type == parser.NodeParent ||
 			nodeHasParentRef(node.Left) || nodeHasParentRef(node.Right) ||
 			// Ternary condition/then/else branches may contain % references.
-			nodeHasParentRef(node.Condition) || nodeHasParentRef(node.Then) || nodeHasParentRef(node.Else) ||
+			nodeHasParentRef(node.Condition()) || nodeHasParentRef(node.Then()) || nodeHasParentRef(node.Else()) ||
 			slices.ContainsFunc(node.Steps, nodeHasParentRef) ||
 			slices.ContainsFunc(node.Expressions, nodeHasParentRef) ||
-			slices.ContainsFunc(node.LHS, nodeHasParentRef) ||
+			slices.ContainsFunc(node.LHS(), nodeHasParentRef) ||
 			// Sort terms carry their own expression subtrees that may reference %.
-			slices.ContainsFunc(node.Terms, func(t parser.SortTerm) bool { return nodeHasParentRef(t.Expression) }) ||
+			slices.ContainsFunc(node.Terms(), func(t parser.SortTerm) bool { return nodeHasParentRef(t.Expression) }) ||
 			// Group key/value pairs.
-			(node.Group != nil && slices.ContainsFunc(node.Group.Pairs, func(p [2]*parser.Node) bool {
+			(node.Group() != nil && slices.ContainsFunc(node.Group().Pairs, func(p [2]*parser.Node) bool {
 				return nodeHasParentRef(p[0]) || nodeHasParentRef(p[1])
 			})))
 }
@@ -211,11 +211,9 @@ func evalPathTuple(node *parser.Node, input any, env *Environment) (any, error) 
 		// that evalPathStep evaluates the base node without group-by reduction.
 		// The group will be applied at the end via evalTupleGroup.
 		evalStep := step
-		if step.Group != nil && finalGroup == nil {
-			finalGroup = step.Group
-			cp := *step
-			cp.Group = nil
-			evalStep = &cp
+		if step.Group() != nil && finalGroup == nil {
+			finalGroup = step.Group()
+			evalStep = step.WithoutGroup()
 		}
 
 		// Sort steps must be applied globally to ALL tuples simultaneously so that
@@ -385,12 +383,12 @@ func evalPathTuple(node *parser.Node, input any, env *Environment) (any, error) 
 		// elements, bind each to $focus_var, then apply the predicate with
 		// access to both the focus variable and previously bound variables.
 		if evalStep.Type == parser.NodeBinary && evalStep.Value == "[" &&
-			evalStep.Left != nil && evalStep.Left.Focus != "" {
+			evalStep.Left != nil && evalStep.Left.Focus() != "" {
 			predicate := evalStep.Right
 			leftNode := evalStep.Left
-			focusVar := leftNode.Focus
-			indexVar := leftNode.Index
-			postFilterIndex := evalStep.Index
+			focusVar := leftNode.Focus()
+			indexVar := leftNode.Index()
+			postFilterIndex := evalStep.Index()
 			var err error
 			if nextCtxs, err = evalJoinFilter(ctxs, nextCtxs, leftNode, predicate, focusVar, indexVar); err != nil {
 				return nil, err
@@ -408,18 +406,18 @@ func evalPathTuple(node *parser.Node, input any, env *Environment) (any, error) 
 		}
 
 		// Compound subscript after a join-filter: binary "[" whose Left is a
-		// binary "[" with Left.Focus set. E.g., books@$b[pred][1] or
+		// binary "[" with Left.Focus() set. E.g., books@$b[pred][1] or
 		// books@$b[pred][]. Process the inner join-filter first to collect
 		// tuples, then apply the outer subscript to the entire tuple collection.
 		if evalStep.Type == parser.NodeBinary && evalStep.Value == "[" &&
 			evalStep.Left != nil && evalStep.Left.Type == parser.NodeBinary && evalStep.Left.Value == "[" &&
-			evalStep.Left.Left != nil && evalStep.Left.Left.Focus != "" {
+			evalStep.Left.Left != nil && evalStep.Left.Left.Focus() != "" {
 			// Process the inner join-filter as if it were a standalone step.
 			innerStep := evalStep.Left
 			predicate := innerStep.Right
 			leftNode := innerStep.Left
-			focusVar := leftNode.Focus
-			indexVar := leftNode.Index
+			focusVar := leftNode.Focus()
+			indexVar := leftNode.Index()
 			var err error
 			if nextCtxs, err = evalJoinFilter(ctxs, nextCtxs, leftNode, predicate, focusVar, indexVar); err != nil {
 				return nil, err
@@ -497,8 +495,8 @@ func evalPathTuple(node *parser.Node, input any, env *Environment) (any, error) 
 
 	// Determine which group expression to apply (step-level or path-level).
 	grp := finalGroup
-	if node.Group != nil {
-		grp = node.Group
+	if node.Group() != nil {
+		grp = node.Group()
 	}
 	if grp != nil {
 		return evalTupleGroup(grp, ctxs)
@@ -548,7 +546,7 @@ func evalSortWithParentTracking(node *parser.Node, input any, env *Environment) 
 
 	sorted := slices.Clone(ctxs)
 	if err := SortItemsErr(sorted, func(a, b pathCtx) (int, error) {
-		return compareSortTerms(node.Terms, a.value, b.value, a.env, b.env)
+		return compareSortTerms(node.Terms(), a.value, b.value, a.env, b.env)
 	}); err != nil {
 		return nil, err
 	}
@@ -688,14 +686,14 @@ func evalTupleSort(step *parser.Node, ctxs []pathCtx) ([]pathCtx, error) {
 		ctxs = expanded
 	}
 
-	if len(step.Terms) == 0 {
+	if len(step.Terms()) == 0 {
 		return ctxs, nil
 	}
 
 	sorted := slices.Clone(ctxs)
 
 	if err := SortItemsErr(sorted, func(a, b pathCtx) (int, error) {
-		return compareSortTerms(step.Terms, a.value, b.value, a.env, b.env)
+		return compareSortTerms(step.Terms(), a.value, b.value, a.env, b.env)
 	}); err != nil {
 		return nil, err
 	}
@@ -766,16 +764,16 @@ func evalJoinFilter(ctxs, dst []pathCtx, leftNode, predicate *parser.Node, focus
 }
 
 // appendTupleResults flattens a step's result into individual (value, env) contexts.
-// It binds step.Index to the OUTPUT element position j (for #$var bindings),
-// step.Focus to each element (for @$var join bindings), and always binds the
+// It binds step.Index() to the OUTPUT element position j (for #$var bindings),
+// step.Focus() to each element (for @$var join bindings), and always binds the
 // current context value as the parent (%%key) for the % operator.
 //
-// When step.Focus is set (join operator @), the context VALUE stays at the parent
+// When step.Focus() is set (join operator @), the context VALUE stays at the parent
 // level rather than advancing to the result element. This implements lateral-join
 // semantics: the variable captures each element, but subsequent path steps continue
 // navigating from the parent context.
 func appendTupleResults(step *parser.Node, result, parentValue any, parentEnv *Environment, nextCtxs *[]pathCtx) {
-	isJoin := step.Focus != ""
+	isJoin := step.Focus() != ""
 
 	bindAt := func(j int, elem any) *Environment {
 		e := NewChildEnvironment(parentEnv)
@@ -783,11 +781,11 @@ func appendTupleResults(step *parser.Node, result, parentValue any, parentEnv *E
 		if isJoin {
 			e.Bind(parentJoinFlag, true)
 		}
-		if step.Index != "" {
-			e.Bind(step.Index, float64(j))
+		if step.Index() != "" {
+			e.Bind(step.Index(), float64(j))
 		}
-		if step.Focus != "" {
-			e.Bind(step.Focus, elem)
+		if step.Focus() != "" {
+			e.Bind(step.Focus(), elem)
 		}
 		return e
 	}
@@ -830,8 +828,8 @@ func appendTupleResults(step *parser.Node, result, parentValue any, parentEnv *E
 func appendTupleResultsNoParent(step *parser.Node, result any, parentEnv *Environment, nextCtxs *[]pathCtx) {
 	bindAt := func(j int, _ any) *Environment {
 		e := NewChildEnvironment(parentEnv)
-		if step.Index != "" {
-			e.Bind(step.Index, float64(j))
+		if step.Index() != "" {
+			e.Bind(step.Index(), float64(j))
 		}
 		return e
 	}

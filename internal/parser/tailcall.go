@@ -18,8 +18,8 @@ func markTailPosition(node *Node) {
 	case NodeFunction:
 		node.Thunk = true
 	case NodeCondition:
-		markTailPosition(node.Then)
-		markTailPosition(node.Else)
+		markTailPosition(node.Then())
+		markTailPosition(node.Else())
 	case NodeBlock:
 		if len(node.Expressions) > 0 {
 			markTailPosition(node.Expressions[len(node.Expressions)-1])

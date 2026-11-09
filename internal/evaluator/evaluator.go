@@ -14,7 +14,7 @@ func Eval(node *parser.Node, input any, env *Environment) (any, error) {
 		return nil, nil
 	} else if err := env.Context().Err(); err != nil {
 		return nil, err
-	} else if node.Group != nil {
+	} else if node.Group() != nil {
 		// If the node has a Group expression (A{key:val}), evaluate the base node
 		// first, then apply the group-by reduction.
 		return evalGroupBy(node, input, env)
@@ -56,7 +56,7 @@ func Eval(node *parser.Node, input any, env *Environment) (any, error) {
 	case parser.NodeSort:
 		// If any sort term references %, we need tuple-aware path evaluation so
 		// that each item carries its parent context during sorting.
-		if slices.ContainsFunc(node.Terms, func(t parser.SortTerm) bool { return nodeHasParentRef(t.Expression) }) {
+		if slices.ContainsFunc(node.Terms(), func(t parser.SortTerm) bool { return nodeHasParentRef(t.Expression) }) {
 			return evalSortWithParentTracking(node, input, env)
 		}
 		return evalSort(node, input, env)

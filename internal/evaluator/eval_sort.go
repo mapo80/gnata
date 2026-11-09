@@ -37,7 +37,7 @@ func evalSort(node *parser.Node, input any, env *Environment) (any, error) {
 		wasArray = false
 	}
 
-	if len(node.Terms) == 0 {
+	if len(node.Terms()) == 0 {
 		if !wasArray && len(arr) == 1 {
 			return arr[0], nil
 		}
@@ -51,7 +51,7 @@ func evalSort(node *parser.Node, input any, env *Environment) (any, error) {
 		if err := ctx.Err(); err != nil {
 			return 0, err
 		}
-		return compareSortTerms(node.Terms, a, b, env, env)
+		return compareSortTerms(node.Terms(), a, b, env, env)
 	}); err != nil {
 		return nil, err
 	}

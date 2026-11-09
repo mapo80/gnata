@@ -85,13 +85,13 @@ func evalLambda(node *parser.Node, input any, env *Environment) (any, error) {
 	}
 	sig := ""
 	var parsedSig []parser.ParamSpec
-	if node.Signature != nil {
-		sig = node.Signature.Raw
+	if node.Signature() != nil {
+		sig = node.Signature().Raw
 		parsedSig, _ = parser.ParseSig(sig)
 	}
 	return &Lambda{
 		Params:        params,
-		Body:          node.Body,
+		Body:          node.Body(),
 		Closure:       env,
 		Thunk:         node.Thunk,
 		Sig:           sig,

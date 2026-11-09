@@ -256,7 +256,7 @@ func evalSubscript(node *parser.Node, input any, env *Environment) (any, error) 
 	// Predicate filter: keep items where right evaluates to truthy.
 	indexVar := ""
 	if node.Left != nil {
-		indexVar = node.Left.Index
+		indexVar = node.Left.Index()
 	}
 	filtered, err := filterByPredicate(node.Right, items, input, indexVar, env)
 	if err != nil {

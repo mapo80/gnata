@@ -246,7 +246,7 @@ func (p *Parser) nud() (*Node, error) { //nolint:gocyclo,funlen // dispatch
 			sub.Value = strconv.FormatFloat(sub.NumVal, 'f', -1, 64)
 			return sub, nil
 		}
-		return &Node{Type: NodeUnary, Value: "-", Expression: sub, Pos: tok.Pos}, nil
+		return &Node{Type: NodeUnary, Value: "-", Pos: tok.Pos, ext: &nodeExt{Expression: sub}}, nil
 
 	case lexer.TokenStar:
 		p.infix = true
@@ -319,7 +319,7 @@ func (p *Parser) nud() (*Node, error) { //nolint:gocyclo,funlen // dispatch
 		if err := p.advance(); err != nil { // consume }
 			return nil, err
 		}
-		return &Node{Type: NodeUnary, Value: "{", LHS: pairs, Pos: pos}, nil
+		return &Node{Type: NodeUnary, Value: "{", Pos: pos, ext: &nodeExt{LHS: pairs}}, nil
 
 	case lexer.TokenLParen:
 		return p.parseParenOrBlock(tok.Pos)
@@ -401,7 +401,7 @@ func (p *Parser) parseLambda(pos int) (*Node, error) {
 		return nil, err
 	}
 	p.infix = true
-	return &Node{Type: NodeLambda, Arguments: params, Body: body, Signature: sig, Pos: pos}, nil
+	return &Node{Type: NodeLambda, Arguments: params, Pos: pos, ext: &nodeExt{Body: body, Signature: sig}}, nil
 }
 
 // parseSignatureString reads tokens until the matching >.
@@ -546,7 +546,7 @@ func (p *Parser) parseTransform(pos int) (*Node, error) {
 		return nil, err
 	}
 	p.infix = true
-	return &Node{Type: NodeTransform, Pattern: pattern, Update: update, Delete: del, Pos: pos}, nil
+	return &Node{Type: NodeTransform, Pos: pos, ext: &nodeExt{Pattern: pattern, Update: update, Delete: del}}, nil
 }
 
 // led is the left denotation (infix handler).
@@ -597,7 +597,7 @@ func (p *Parser) led(left *Node) (*Node, error) { //nolint:gocyclo,funlen // dis
 		if err := p.advance(); err != nil {
 			return nil, err
 		}
-		left.Focus = name
+		left.x().Focus = name
 		return left, nil
 
 	case lexer.TokenHash:
@@ -616,7 +616,7 @@ func (p *Parser) led(left *Node) (*Node, error) { //nolint:gocyclo,funlen // dis
 		if err := p.advance(); err != nil {
 			return nil, err
 		}
-		left.Index = name
+		left.x().Index = name
 		return left, nil
 
 	case lexer.TokenQuestion:
@@ -628,7 +628,7 @@ func (p *Parser) led(left *Node) (*Node, error) { //nolint:gocyclo,funlen // dis
 		if err != nil {
 			return nil, err
 		}
-		node := &Node{Type: NodeCondition, Condition: left, Then: then, Pos: tok.Pos}
+		node := &Node{Type: NodeCondition, Pos: tok.Pos, ext: &nodeExt{Condition: left, Then: then}}
 		if p.token.Type == lexer.TokenColon {
 			if err := p.advancePrefix(); err != nil { // after :, else-branch is prefix
 				return nil, err
@@ -637,7 +637,7 @@ func (p *Parser) led(left *Node) (*Node, error) { //nolint:gocyclo,funlen // dis
 			if err != nil {
 				return nil, err
 			}
-			node.Else = elseBranch
+			node.ext.Else = elseBranch
 		}
 		return node, nil
 
@@ -869,7 +869,7 @@ func (p *Parser) led(left *Node) (*Node, error) { //nolint:gocyclo,funlen // dis
 		// Group expression: attach key-value pairs to left.
 		pos := tok.Pos
 		// S0210: A step can only have one group-by expression.
-		if left.Group != nil {
+		if left.Group() != nil {
 			return nil, parseError("S0210", "{", "each step can only have one grouping expression")
 		}
 		if err := p.advance(); err != nil {
@@ -884,7 +884,7 @@ func (p *Parser) led(left *Node) (*Node, error) { //nolint:gocyclo,funlen // dis
 			return nil, err
 		}
 		group := &GroupExpr{Pairs: pairsToGroupPairs(pairs), Pos: pos}
-		left.Group = group
+		left.x().Group = group
 		return left, nil
 
 	case lexer.TokenCaret:
@@ -948,7 +948,7 @@ func (p *Parser) parseFunctionCall(callee *Node, pos int) (*Node, error) {
 // parseSubscript parses [ expr ] in infix position.
 func (p *Parser) parseSubscript(left *Node, pos int) (*Node, error) {
 	// S0209: A predicate/subscript cannot follow a group-by expression.
-	if left.Group != nil {
+	if left.Group() != nil {
 		return nil, parseError("S0209", "[", "a predicate cannot follow a grouping expression in a step")
 	}
 	if err := p.advancePrefix(); err != nil { // consume [, subscript content is prefix
@@ -1010,7 +1010,7 @@ func (p *Parser) parseSortExpr(left *Node, pos int) (*Node, error) {
 	if err := p.advance(); err != nil { // consume )
 		return nil, err
 	}
-	return &Node{Type: NodeSort, Left: left, Terms: terms, Pos: pos}, nil
+	return &Node{Type: NodeSort, Left: left, Pos: pos, ext: &nodeExt{Terms: terms}}, nil
 }
 
 // pairsToGroupPairs converts flat [k, v, k, v, ...] slice to [][2]*Node pairs.

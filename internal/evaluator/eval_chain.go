@@ -103,15 +103,15 @@ func evalBlock(node *parser.Node, input any, env *Environment) (any, error) {
 }
 
 func evalCondition(node *parser.Node, input any, env *Environment) (any, error) {
-	cond, err := Eval(node.Condition, input, env)
+	cond, err := Eval(node.Condition(), input, env)
 	if err != nil {
 		return nil, err
 	}
 	if ToBoolean(cond) {
-		return Eval(node.Then, input, env)
+		return Eval(node.Then(), input, env)
 	}
-	if node.Else != nil {
-		return Eval(node.Else, input, env)
+	if node.Else() != nil {
+		return Eval(node.Else(), input, env)
 	}
 	return nil, nil
 }
